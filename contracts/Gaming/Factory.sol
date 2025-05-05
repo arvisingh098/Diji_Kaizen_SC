@@ -1,76 +1,151 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.29;
 
-// Import OpenZeppelin contracts
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "./Game/Game.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import "./interfaces/ITreasury.sol";
+import "./Game/DijiKaizenGame.sol";
 
-// Import the ITreasury interface
-import "./interface/ITreasury.sol";
+/**
+ * @title DijiKaizenFactory
+ * @dev Factory contract for deploying upgradable Diji Kaizen game contracts
+ */
+contract DijiKaizenFactory is Initializable, UUPSUpgradeable {
+    // Addresses of dependent contracts
+    ITreasury public treasuryContract;
+    address public soulStakingContract;
+    address public itemNFTContract;
+    address public bakaBearNFTContract;
+    address public gameImplementationContract;
 
-contract GameFactory is Initializable, UUPSUpgradeable {
-    // State variables
-    uint256 public contractCounter; // Ticker for contract IDs
-    mapping(uint256 => address) private _deployedContracts; // Stores deployed contract addresses by ID
-    ITreasury private _treasury; // Treasury contract to validate admin role
+    // Tracking deployed game instances
+    address[] public deployedGames;
+
+    address[] public acceptedToken;
 
     // Events
-    event GameContractDeployed(uint256 indexed id, address indexed contractAddress);
+    event GameDeployed(address indexed gameAddress, string[] options);
+    event ConfigsUpdated(
+        address treasuryContract,
+        address itemNFT,
+        address soulStaking,
+        address bakaBear,
+        address gameImplementation,
+        address[] acceptedToken
+    );
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() initializer {}
-
-    /**
-     * @dev Initialize the factory contract.
-     * @param treasuryAddress The address of the treasury contract implementing ITreasury.
-     */
-    function initialize(address treasuryAddress) public initializer {
-        __UUPSUpgradeable_init();
-        _treasury = ITreasury(treasuryAddress); // Set the treasury contract address
+    /// @custom:oz-upgrades-unsafe-allow constructro
+    constructor() {
+        _disableInitializers();
     }
 
     /**
-     * @dev Modifier to check if the caller is an admin.
+     * @dev Initializes the factory with contract addresses
+     * @param _treasuryContract Address of the treasuryContractAddress contract
+     * @param _itemNFTContract Address of the item NFT contract
+     * @param _soulStakingContract Address of the soul staking contract
+     * @param _bakaBearNFTContract Address of the Baka Bear NFT contract
+     * @param _gameImplementationContract Address of the Game logic contract
+     * @param _acceptedToken Array of accepted token
      */
-    modifier isAdmin() {
-        require(_treasury.isRoleAdmin(msg.sender), "GameFactory: Caller is not an admin");
+    function initialize(
+        address _treasuryContract,
+        address _itemNFTContract,
+        address _soulStakingContract,
+        address _bakaBearNFTContract,
+        address _gameImplementationContract,
+        address[] memory  _acceptedToken
+    ) external initializer {
+        treasuryContract = ITreasury(_treasury);
+        itemNFTContract = _itemNFTContract;
+        soulStakingContract = _soulStakingContract;
+        bakaBearNFTContract = _bakaBearNFTContract;
+        gameImplementationContract = _gameImplementationContract;
+        acceptedToken =_acceptedToken;
+        __UUPSUpgradeable_init();
+    }
+
+    /**
+     * @dev Modifier to restrict function access to admins
+     */
+    modifier onlyAdmin() {
+        require(treasuryContractAddress.isRoleAdmin(msg.sender), "Caller is not admin");
         _;
     }
 
     /**
-     * @dev Deploy a new game contract. Only callable by an admin.
+     * @dev Deploys a new upgradable game contract using ERC1967 proxy
+     * @param _options Voting options (string array)
+     * @param _bakaBearAddress Address of Baka Bear NFT
+     * @param _phase1StartTime Start of phase 1 (unix timestamp)
+     * @param _phase1EndTime End of phase 1
+     * @param _phase2StartTime Start of phase 2
+     * @param _phase2EndTime End of phase 2
      */
-    function deployGameContract() external isAdmin {
-        // Increment the contract counter
-        contractCounter++;
+    function deployGame(
+        string[] memory _options,
+        uint256 _phase1StartTime,
+        uint256 _phase1EndTime,
+        uint256 _phase2StartTime,
+        uint256 _phase2EndTime,
+    ) external onlyAdmin {
+        bytes memory initData = abi.encodeWithSelector(
+            DijiKaizenGame.initialize.selector,
+            _options,
+            _phase1StartTime,
+            _phase1EndTime,
+            _phase2StartTime,
+            _phase2EndTime
+        );
 
-        // Deploy a new game contract
-        GameContract newContract = new GameContract();
-        address newContractAddress = address(newContract);
-
-        // Initialize the game contract with the treasury address
-        GameContract(newContractAddress).initialize(address(_treasury));
-
-        // Store the deployed contract address
-        _deployedContracts[contractCounter] = newContractAddress;
-
-        // Emit an event
-        emit GameContractDeployed(contractCounter, newContractAddress);
+        ERC1967Proxy proxy = new ERC1967Proxy(gameImplementationContract, initData);
+        deployedGames.push(address(proxy));
+        emit GameDeployed(address(proxy),_phase1StartTime,_phase1EndTime,_phase2StartTime,_phase2EndTime, _options);
     }
 
     /**
-     * @dev Get the address of a deployed contract by ID.
-     * @param id The ID of the deployed contract.
-     * @return The address of the deployed contract.
+     * @dev Allows admin to update dependent contract addresses
+     * @param _treasury Address of the new treasuryContractAddress contract
+     * @param _itemNFT Address of the new item NFT contract
+     * @param _soulStaking Address of the new soul staking contract
+     * @param _bakaBear Address of the new Baka Bear NFT contract
+     * @param _gameImplementation Address of the new Game implementation contract
+     * @param _acceptedToken Array of accepted token
      */
-    function getDeployedContract(uint256 id) external view returns (address) {
-        require(_deployedContracts[id] != address(0), "GameFactory: Invalid contract ID");
-        return _deployedContracts[id];
+    function updateContractConfigs(
+        address _treasury,
+        address _itemNFT,
+        address _soulStaking,
+        address _bakaBear,
+        address _gameImplementation,
+        address[] _acceptedToken
+    ) external onlyAdmin {
+        treasuryContract = ITreasury(_treasury);
+        itemNFTContract = _itemNFT;
+        soulStakingContract = _soulStaking;
+        bakaBearNFTContract = _bakaBear;
+        gameImplementationContract = _gameImplementation;
+        acceptedToken=_acceptedToken;
+        emit ConfigsUpdated(_treasury, _itemNFT, _soulStaking, _bakaBear, _gameImplementation,_acceptedToken);
     }
 
     /**
-     * @dev Internal function to authorize upgrades. Only an admin can upgrade.
+     * @dev Returns all deployed game addresses
      */
-    function _authorizeUpgrade(address newImplementation) internal override isAdmin {}
+    function getAllDeployedGames() external view returns (address[] memory) {
+        return deployedGames;
+    }
+
+    /**
+     * @dev Returns total number of deployed games
+     */
+    function getGameCount() external view returns (uint256) {
+        return deployedGames.length;
+    }
+
+    /**
+     * @dev Authorizes contract upgrades (UUPS)
+     */
+    function _authorizeUpgrade(address newImplementation) internal override onlyAdmin {}
 }
